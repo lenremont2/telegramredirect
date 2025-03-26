@@ -3,17 +3,19 @@
 <head>
   <title>Telegram Redirect</title>
   <script>
-    // Получаем телефон из параметра URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const phone = urlParams.get('phone');
-    
-    // Если номер телефона получен, перенаправляем в Telegram
-    if (phone) {
-      window.location.href = "https://t.me/" + phone;
+    window.onload = function() {
+      // Получаем параметр phone из URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const phone = urlParams.get('phone');
+      
+      // Если телефон указан, перенаправляем на Telegram
+      if (phone) {
+        window.location.href = "https://t.me/" + phone;
+      }
     }
   </script>
 </head>
 <body>
-  <p>Перенаправление...</p>
+  <p>Перенаправление в Telegram...</p>
 </body>
 </html>
