@@ -4,13 +4,11 @@
   <title>Telegram Redirect</title>
   <script>
     window.onload = function() {
-      // Получаем параметр phone из URL
       const urlParams = new URLSearchParams(window.location.search);
       const phone = urlParams.get('phone');
       
-      // Если телефон указан, перенаправляем на Telegram
       if (phone) {
-        window.location.href = "https://t.me/" + phone;
+        window.location.href = "tg://resolve?phone=" + phone;
       }
     }
   </script>
