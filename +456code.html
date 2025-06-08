@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Хомячок-ремонтник (Image Version)</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #333; /* Темный фон на время загрузки */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+        }
+        #loadingScreen { font-size: 24px; }
+        #gameCanvas {
+            display: none; /* Скрыт до полной загрузки */
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #gameOverScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 30px 40px;
+            background-color: rgba(0, 0, 0, 0.75);
+            color: white;
+            border-radius: 15px;
+            text-align: center;
+            display: none;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            min-width: 280px;
+        }
+
+        #gameOverScreen h2 { margin: 0 0 10px 0; font-size: 24px; }
+        #finalDiscount { font-size: 48px; font-weight: bold; color: #ffeb3b; margin: 15px 0; }
+        #highScore { font-size: 16px; margin-bottom: 25px; color: #e0e0e0; }
+        #restartBtn {
+            padding: 12px 25px; font-size: 18px; font-weight: bold; cursor: pointer;
+            border: none; border-radius: 8px; background-color: #ff9800;
+            color: #212121; transition: background-color 0.2s, transform 0.1s;
+        }
+        #restartBtn:hover { background-color: #f57c00; }
+        #restartBtn:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+
+    <div id="loadingScreen">Загрузка изображений...</div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="gameOverScreen">
+        <h2>Игра окончена!</h2>
+        <p>Ваша итоговая скидка:</p>
+        <div id="finalDiscount">0.0%</div>
+        <p id="highScore">Лучший результат: 0.0%</p>
+        <button id="restartBtn">Начать заново</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const restartBtn = document.getElementById('restartBtn');
+        const finalDiscountEl = document.getElementById('finalDiscount');
+        const highScoreEl = document.getElementById('highScore');
+        const loadingScreen = document.getElementById('loadingScreen');
+
+        // --- 1. ИСТОЧНИКИ ИЗОБРАЖЕНИЙ ---
+        const imageUrls = {
+            player: 'https://www.lenremont.ru/wp-content/uploads/2025/06/ChatGPT-Image-8-июн.-2025-г.-19_58_05.jpg',
+            techniques: [
+                'https://www.lenremont.ru/wp-content/uploads/2025/06/nout.png',
+                'https://www.lenremont.ru/wp-content/uploads/2025/06/pul.jpg',
+                'https://www.lenremont.ru/wp-content/uploads/2025/06/stir.jpg',
+                'https://www.lenremont.ru/wp-content/uploads/2025/06/hol.jpg',
+                'https://www.lenremont.ru/wp-content/uploads/2025/06/benzo.jpg'
+            ]
+        };
+
+        const config = {
+            player: {
+                width: 120, // Размеры подобраны под пропорции фургона
+                height: 60,
+                x: 100,
+            },
+            physics: { gravity: 0.6, jumpStrength: -12.5 },
+            world: { initialSpeed: 8, speedIncrement: 0.8, groundHeight: 180, groundColor: '#1976D2' },
+            technique: {
+                width: 50, // Стандартный размер для всей техники
+                height: 50,
+                spawnInterval: 120,
+                initialAmplitude: 50,
+                amplitudeIncrement: 5,
+                minGapAbovePlayer: 15
+            },
+            hatch: { minWidth: 80, maxWidth: 120, spawnBaseInterval: 400 },
+            particles: { count: 10, speed: 3, lifespan: 40, color: '#ffeb3b' }
+        };
+
+        // Глобальный объект для хранения загруженных изображений
+        let loadedImages = { player: null, techniques: [] };
+
+        let gameState;
+        let player, groundY, gameSpeed, collectedCount;
+        let obstacles, particles;
+        let frameCount, nextTechniqueSpawn, nextHatchSpawn, techniqueAmplitude;
+        
+        // --- 2. ПРЕ-ЗАГРУЗЧИК АССЕТОВ ---
+        function loadAssets(callback) {
+            let totalAssets = 1 + imageUrls.techniques.length;
+            let loadedCount = 0;
+
+            function onAssetLoad() {
+                loadedCount++;
+                if (loadedCount === totalAssets) {
+                    loadingScreen.style.display = 'none';
+                    canvas.style.display = 'block';
+                    callback();
+                }
+            }
+
+            // Загрузка изображения игрока
+            loadedImages.player = new Image();
+            loadedImages.player.crossOrigin = "Anonymous";
+            loadedImages.player.src = imageUrls.player;
+            loadedImages.player.onload = onAssetLoad;
+
+            // Загрузка изображений техники
+            imageUrls.techniques.forEach(url => {
+                const img = new Image();
+                img.crossOrigin = "Anonymous";
+                img.src = url;
+                img.onload = onAssetLoad;
+                loadedImages.techniques.push(img);
+            });
+        }
+        
+        function init() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gameState = 'running';
+            gameSpeed = config.world.initialSpeed;
+            collectedCount = 0;
+            frameCount = 0;
+            techniqueAmplitude = config.technique.initialAmplitude;
+            obstacles = [];
+            particles = [];
+            groundY = canvas.height - config.world.groundHeight;
+            player = {
+                x: config.player.x,
+                y: groundY - config.player.height,
+                width: config.player.width,
+                height: config.player.height,
+                velocityY: 0,
+                isGrounded: true,
+            };
+            nextTechniqueSpawn = config.technique.spawnInterval;
+            nextHatchSpawn = config.hatch.spawnBaseInterval + Math.random() * 200;
+            gameOverScreen.style.display = 'none';
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameLoop() {
+            if (gameState !== 'running') return;
+            update();
+            draw();
+            frameCount++;
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update() {
+            if (!player.isGrounded) {
+                player.velocityY += config.physics.gravity;
+                player.y += player.velocityY;
+            }
+            if (player.y + player.height >= groundY) {
+                player.y = groundY - player.height;
+                player.velocityY = 0;
+                player.isGrounded = true;
+            } else {
+                player.isGrounded = false;
+            }
+            spawnObjects();
+            updateObstacles();
+            updateParticles();
+        }
+        
+        function spawnObjects() {
+            if (frameCount >= nextTechniqueSpawn) {
+                const playerTopY = groundY - config.player.height;
+                const centerY = playerTopY - techniqueAmplitude - config.technique.minGapAbovePlayer;
+                
+                // --- 3. РАНДОМНЫЙ ВЫБОР ТЕХНИКИ ---
+                const randomIndex = Math.floor(Math.random() * loadedImages.techniques.length);
+                const randomImage = loadedImages.techniques[randomIndex];
+
+                obstacles.push({
+                    type: 'technique',
+                    x: canvas.width,
+                    initialY: centerY,
+                    width: config.technique.width,
+                    height: config.technique.height,
+                    amplitude: techniqueAmplitude,
+                    image: randomImage // Сохраняем конкретное изображение для объекта
+                });
+                nextTechniqueSpawn = frameCount + Math.max(30, config.technique.spawnInterval - gameSpeed * 5);
+            }
+            if (frameCount >= nextHatchSpawn) {
+                const hatchWidth = config.hatch.minWidth + Math.random() * (config.hatch.maxWidth - config.hatch.minWidth);
+                obstacles.push({ type: 'hatch', x: canvas.width, y: groundY, width: hatchWidth, height: config.world.groundHeight });
+                const spawnInterval = config.hatch.spawnBaseInterval / (gameSpeed / config.world.initialSpeed);
+                nextHatchSpawn = frameCount + spawnInterval + Math.random() * 150;
+            }
+        }
+
+        function updateObstacles() {
+            let isOverHatch = false;
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obj = obstacles[i];
+                obj.x -= gameSpeed;
+                if (obj.type === 'technique') {
+                    obj.y = obj.initialY + obj.amplitude * Math.sin(frameCount * 0.05);
+                    if (player.x < obj.x + obj.width && player.x + player.width > obj.x &&
+                        player.y < obj.y + obj.height && player.y + player.height > obj.y) {
+                        collectTechnique(obj);
+                        obstacles.splice(i, 1);
+                        continue;
+                    }
+                }
+                if (obj.type === 'hatch' && player.x + player.width / 2 > obj.x && player.x + player.width / 2 < obj.x + obj.width) {
+                    isOverHatch = true;
+                }
+                if (obj.x + obj.width < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+            if (isOverHatch && player.isGrounded) endGame();
+        }
+
+        function collectTechnique(technique) {
+            const oldDiscount = calculateDiscount(collectedCount);
+            collectedCount++;
+            const newDiscount = calculateDiscount(collectedCount);
+            spawnParticles(technique.x + technique.width / 2, technique.y + technique.height / 2);
+            if (Math.floor(newDiscount) > Math.floor(oldDiscount)) {
+                gameSpeed += config.world.speedIncrement;
+                techniqueAmplitude += config.technique.amplitudeIncrement;
+            }
+        }
+        
+        function spawnParticles(x, y) { for (let i = 0; i < config.particles.count; i++) { particles.push({ x, y, vx: (Math.random() - 0.5) * config.particles.speed, vy: (Math.random() - 0.5) * config.particles.speed, life: config.particles.lifespan, color: config.particles.color, size: Math.random() * 3 + 1 }); } }
+        function updateParticles() { for (let i = particles.length - 1; i >= 0; i--) { const p = particles[i]; p.x += p.vx; p.y += p.vy; p.life--; if (p.life <= 0) particles.splice(i, 1); } }
+
+        function draw() {
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            skyGradient.addColorStop(0, '#87CEEB'); skyGradient.addColorStop(1, '#e0f7fa');
+            ctx.fillStyle = skyGradient; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = config.world.groundColor; ctx.fillRect(0, groundY, canvas.width, config.world.groundHeight);
+            drawObstacles();
+            drawPlayer();
+            drawParticles();
+            drawUI();
+        }
+        
+        // --- 4. ОТРИСОВКА ИЗОБРАЖЕНИЙ ---
+        function drawPlayer() {
+            ctx.drawImage(loadedImages.player, player.x, player.y, player.width, player.height);
+        }
+        function drawObstacles() {
+            obstacles.forEach(obj => {
+                if (obj.type === 'technique') {
+                    ctx.drawImage(obj.image, obj.x, obj.y, obj.width, obj.height);
+                } else if (obj.type === 'hatch') {
+                    const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                    skyGradient.addColorStop(0, '#87CEEB'); skyGradient.addColorStop(1, '#e0f7fa');
+                    ctx.fillStyle = skyGradient;
+                    ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+                }
+            });
+        }
+        
+        function drawParticles() {
+            particles.forEach(p => {
+                ctx.fillStyle = p.color; ctx.globalAlpha = p.life / config.particles.lifespan;
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+        }
+        
+        function drawUI() { const discount = calculateDiscount(collectedCount); ctx.fillStyle = 'black'; ctx.font = '24px Arial'; ctx.textAlign = 'left'; ctx.fillText(`Скидка: ${discount.toFixed(1)}%`, 20, 40); }
+        function calculateDiscount(n) { return n * 0.1; }
+        function handleJump() { if (gameState === 'running' && player.isGrounded) { player.velocityY = config.physics.jumpStrength; player.isGrounded = false; } }
+        
+        function endGame() {
+            gameState = 'gameOver';
+            const finalDiscount = calculateDiscount(collectedCount);
+            finalDiscountEl.textContent = `${finalDiscount.toFixed(1)}%`;
+            let highScore = parseFloat(localStorage.getItem('hamsterWithImagesHighScore')) || 0;
+            if (finalDiscount > highScore) {
+                highScore = finalDiscount;
+                localStorage.setItem('hamsterWithImagesHighScore', highScore.toString());
+            }
+            highScoreEl.textContent = `Лучший результат: ${highScore.toFixed(1)}%`;
+            gameOverScreen.style.display = 'block';
+        }
+
+        function handleResize() { 
+            // Не перезапускаем игру при ресайзе, если она уже идет, чтобы не сбрасывать прогресс.
+            // Вместо этого просто адаптируем размеры
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            groundY = canvas.height - config.world.groundHeight;
+            if (gameState !== 'running') {
+                init();
+            }
+        }
+
+        // --- 5. ЗАПУСК ИГРЫ ПОСЛЕ ЗАГРУЗКИ ---
+        window.addEventListener('resize', handleResize);
+        document.addEventListener('mousedown', handleJump);
+        document.addEventListener('touchstart', (e) => { e.preventDefault(); handleJump(); });
+        restartBtn.addEventListener('click', init);
+
+        // Начинаем с загрузки ассетов, а init() будет вызван как callback
+        loadAssets(init);
+    </script>
+</body>
+</html>
